@@ -3,19 +3,23 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # Configurazione pagina
-st.set_page_config(page_title="Analisi Rete Danese V2", layout="wide")
+st.set_page_config(page_title="Analisi Rete Danese V3", layout="wide")
 
-st.title("⚡ Analisi Rete Danimarca: Intermittenza, Capacità e Storage")
+st.title("⚡ Analisi Rete Danimarca: Intermittenza e Capacità Installata")
 
-# --- DATI STATICI: POTENZA INSTALLATA (GW) ---
-# Dati approssimativi Danimarca (aggiornati al 2023/2024)
-# Poiché il file CSV contiene solo la generazione, usiamo un dizionario statico
-# I valori sono in MW (Megawatt)
+# --- DATI STATICI: POTENZA INSTALLATA (MW) ---
+# Dati approssimativi del parco di generazione danese
 CAPACITY_MW = {
-    'OnshoreWindPower': 4800,
-    'OffshoreWindPower': 2700,
-    'SolarPower_Total': 3500, # Somma di rete e autoconsumo
-    'FossilGas': 1500, # Capacità termica flessibile
+    'OnshoreWindPower': {'label': 'Eolico Onshore', 'mw': 4800, 'color': '#9edae5'},
+    'SolarPower_Total': {'label': 'Fotovoltaico (Totale)', 'mw': 4000, 'color': '#ff7f0e'},
+    'OffshoreWindPower': {'label': 'Eolico Offshore', 'mw': 2700, 'color': '#17becf'},
+    'Biomass': {'label': 'Biomassa', 'mw': 2000, 'color': '#98df8a'},
+    'FossilGas': {'label': 'Gas Naturale', 'mw': 1500, 'color': '#8c564b'},
+    'FossilHardCoal': {'label': 'Carbone', 'mw': 900, 'color': '#1f1f1f'},
+    'Waste': {'label': 'Rifiuti', 'mw': 500, 'color': '#7f7f7f'},
+    'FossilOil': {'label': 'Olio Combustibile', 'mw': 400, 'color': '#5c5c5c'},
+    'Biogas': {'label': 'Biogas', 'mw': 150, 'color': '#2ca02c'},
+    'HydroPower': {'label': 'Idroelettrico', 'mw': 10, 'color': '#1f77b4'},
 }
 
 @st.cache_data
@@ -25,7 +29,6 @@ def load_data():
     df_grouped = df.groupby('TimeDK').sum(numeric_only=True).reset_index()
     df_grouped = df_grouped.sort_values('TimeDK')
     
-    # Creiamo una colonna aggregata per il solare totale per comodità
     if 'SolarPower' in df_grouped.columns and 'SolarPowerSelfCon' in df_grouped.columns:
         df_grouped['SolarPower_Total'] = df_grouped['SolarPower'] + df_grouped['SolarPowerSelfCon']
         
@@ -50,44 +53,37 @@ if df_day.empty:
     st.warning("Nessun dato disponibile per questa data.")
     st.stop()
 
-# --- SEZIONE 1: BATTERIE E STORAGE ---
-st.info("🔋 **Il ruolo delle Batterie in Danimarca:** Nel dataset principale di Energinet non è presente una colonna dedicata all'accumulo a batterie (BESS). Questo perché la Danimarca utilizza storicamente i **cavi di interconnessione con Norvegia e Svezia come un'immensa batteria virtuale** (sfruttando il loro idroelettrico a pompaggio). Le batterie domestiche/utility-scale stanno crescendo, ma sono usate perlopiù per i servizi di dispacciamento ultra-rapidi (FCR), non per lo shift di grandi volumi di energia (arbitraggio).")
 
-# --- SEZIONE 2: KPI E CAPACITA' INSTALLATA ---
-st.subheader(f"Resa Impianti (Capacity Factor) - {selected_date.strftime('%d/%m/%Y')}")
+# --- SEZIONE 1: POTENZA INSTALLATA ---
+st.subheader("🏗️ Potenza Installata per Fonte (Capacità Nominale)")
+st.markdown("Questa sezione mostra la capacità massima teorica installata in Danimarca per ogni tecnologia.")
 
-# Calcoliamo il picco massimo di generazione raggiunto in quel giorno
-max_solar = df_day['SolarPower_Total'].max()
-max_onshore = df_day['OnshoreWindPower'].max()
-max_offshore = df_day['OffshoreWindPower'].max()
+# Prepariamo i dati per il grafico a barre
+cap_df = pd.DataFrame.from_dict(CAPACITY_MW, orient='index').reset_index()
+cap_df = cap_df.sort_values(by='mw', ascending=True)
 
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Fotovoltaico (Picco vs Installato)", 
-    f"{max_solar:,.0f} MW", 
-    f"{(max_solar/CAPACITY_MW['SolarPower_Total'])*100:.1f}% della capacità",
-    delta_color="off"
+fig_cap = go.Figure(go.Bar(
+    x=cap_df['mw'],
+    y=cap_df['label'],
+    orientation='h',
+    marker_color=cap_df['color'],
+    text=cap_df['mw'].apply(lambda x: f"{x:,.0f} MW"),
+    textposition='auto'
+))
+fig_cap.update_layout(
+    height=400,
+    xaxis_title="Potenza Installata (MW)",
+    margin=dict(l=0, r=0, t=10, b=0)
 )
-col2.metric(
-    "Eolico Onshore (Picco vs Installato)", 
-    f"{max_onshore:,.0f} MW", 
-    f"{(max_onshore/CAPACITY_MW['OnshoreWindPower'])*100:.1f}% della capacità",
-    delta_color="off"
-)
-col3.metric(
-    "Eolico Offshore (Picco vs Installato)", 
-    f"{max_offshore:,.0f} MW", 
-    f"{(max_offshore/CAPACITY_MW['OffshoreWindPower'])*100:.1f}% della capacità",
-    delta_color="off"
-)
+st.plotly_chart(fig_cap, use_container_width=True)
 
 
 # --- GRAFICO PRINCIPALE: Mix di Generazione (Stack Area) ---
-st.subheader("Curva di Generazione per Fonte")
+st.subheader(f"📈 Curva di Generazione Reale - {selected_date.strftime('%d/%m/%Y')}")
+
 fig = go.Figure()
 
-sources = {
+sources_gen = {
     'FossilHardCoal': ('Carbone', '#1f1f1f'),
     'FossilOil': ('Olio', '#5c5c5c'),
     'FossilGas': ('Gas Naturale (Turbogas)', '#8c564b'),
@@ -101,11 +97,7 @@ sources = {
     'SolarPowerSelfCon': ('Fotovoltaico (Autoconsumo)', '#ffbb78')
 }
 
-# Se nel dataset futuro aggiungessi le batterie:
-if 'BatteryDischarge' in df_day.columns:
-    sources['BatteryDischarge'] = ('Scarica Batterie', '#e377c2')
-
-for col_name, (label, color) in sources.items():
+for col_name, (label, color) in sources_gen.items():
     if col_name in df_day.columns and df_day[col_name].sum() > 0:
         fig.add_trace(go.Scatter(
             x=df_day['TimeDK'], y=df_day[col_name], name=label,
